@@ -62,14 +62,20 @@ app.post('/api/public/whatsapp', async (req, res) => {
     console.log('Audio downloaded, size:', audioBuffer.byteLength)
 
     // Step 3 — Transcribe using Groq Whisper (free)
+    const audioBufferNode = Buffer.from(audioBuffer)
+
     const form = new FormData()
-    form.append('file', Buffer.from(audioBuffer), {
+    form.append('file', audioBufferNode, {
       filename: 'audio.ogg',
-      contentType: 'audio/ogg'
+      contentType: 'audio/ogg; codecs=opus',
+      knownLength: audioBufferNode.length
     })
     form.append('model', 'whisper-large-v3')
     form.append('language', 'en')
     form.append('response_format', 'json')
+
+    console.log('Form data size:', audioBufferNode.length)
+    console.log('Sending to Groq...')
 
     const transcribeRes = await fetch(
       'https://api.groq.com/openai/v1/audio/transcriptions',
@@ -78,23 +84,10 @@ app.post('/api/public/whatsapp', async (req, res) => {
         headers: {
           Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
           ...form.getHeaders()
-        },
+      },
         body: form
       }
     )
-    const transcribeData = await transcribeRes.json()
-    console.log('Groq transcription response:', JSON.stringify(transcribeData))
-
-    const transcript = transcribeData.text
-    if (!transcript) {
-      console.error('Transcription failed:', JSON.stringify(transcribeData))
-      await sendWhatsAppMessage(
-        fromNumber,
-        "Sorry, I couldn't transcribe your voice note. Please try again."
-      )
-      return
-    }
-    console.log('Transcript:', transcript)
 
     // Step 4 — Extract meeting minutes using Groq LLaMA (free)
     const minutesRes = await fetch(
