@@ -71,7 +71,13 @@ app.post('/api/public/whatsapp', async (req, res) => {
       }
     )
     const transcribeData = await transcribeRes.json()
+    console.log('Whisper API response:', JSON.stringify(transcribeData))
     const transcript = transcribeData.text
+
+    if (!transcript) {
+    console.error('Transcription failed:', JSON.stringify(transcribeData))
+    return
+    }
     console.log('Transcript:', transcript)
 
     // Step 4 — Extract meeting minutes using OpenAI
