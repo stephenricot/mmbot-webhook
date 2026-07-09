@@ -222,19 +222,33 @@ app.post('/api/public/whatsapp', async (req, res) => {
           messages: [
             {
               role: 'system',
-              content: `You are a professional meeting minutes extractor.
-              From the transcript provided, extract and format:
-
+              content: `You are a professional meeting minutes extractor and audio transcript cleaner.
+              STEP 1 - CLEAN THE TRANSCRIPT FIRST:
+              Before extracting minutes, filter out the following from the transcript:
+              - Filler words: "uh", "um", "ah", "like", "you know", "so", "basically", "actually", "literally"
+              - False starts and repeated words: "we we will", "the the project"
+              - Background noise descriptions or irrelevant sounds
+              - Off-topic conversations or side comments not related to the meeting
+              - Greetings and small talk at the start: "hello", "good morning", "how are you", "okay let's start"
+              - Closing remarks: "okay bye", "thank you everyone", "see you next time"
+              - Any sentence that does not contribute to meeting content
+              
+              STEP 2 - EXTRACT AND FORMAT MEETING MINUTES:
+              From the cleaned transcript, extract:
+              
               📌 *Meeting Topic*
               👥 *Attendees* (if mentioned)
               📝 *Key Points Discussed*
               ✅ *Decisions Made*
               📋 *Action Items* (with person responsible and due date if mentioned)
               📅 *Next Meeting* (if mentioned)
-
-              Format as a clean WhatsApp message using emojis.
-              Be concise and professional.
-              Skip sections not mentioned in the transcript.`
+              
+              FORMAT RULES:
+              - Format as a clean WhatsApp message using emojis
+              - Be concise and professional
+              - Skip sections not mentioned in the transcript
+              - If the transcript contains no meeting content after cleaning, reply with:
+                "⚠️ No meeting content detected. Please send a voice note of your actual meeting discussion."``
             },
             {
               role: 'user',
