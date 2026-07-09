@@ -31,11 +31,16 @@ app.post('/api/public/whatsapp', async (req, res) => {
 
     // Step 1 — Get audio URL from WhatsApp
     const mediaRes = await fetch(
-      `https://graph.facebook.com/v18.0/${audioId}`,
-      { headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` } }
+    `https://graph.facebook.com/v18.0/${audioId}`,
+    { headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` } }
     )
     const mediaData = await mediaRes.json()
-    const audioUrl = mediaData.url
+    console.log('Media API response:', JSON.stringify(mediaData))
+    const audioUrl = mediaData.url || mediaData?.messaging_product?.url
+    if (!audioUrl) {
+    console.error('No audio URL found in response:', mediaData)
+    return
+    }
     console.log('Audio URL retrieved:', audioUrl)
 
     // Step 2 — Download audio
