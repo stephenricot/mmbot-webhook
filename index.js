@@ -1,9 +1,39 @@
-const fetch = require('node-fetch')
 const express = require('express')
 const FormData = require('form-data')
+const fetch = require('node-fetch')
+const { createClient } = require('@supabase/supabase-js')
+
 const app = express()
 app.use(express.json())
 
+// Helper function to send WhatsApp messages
+async function sendWhatsAppMessage(to, message) {
+  try {
+    const res = await fetch(
+      `https://graph.facebook.com/v18.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          to: to,
+          type: 'text',
+          text: { body: message }
+        })
+      }
+    )
+    const data = await res.json()
+    console.log('WhatsApp send response:', JSON.stringify(data))
+    return data
+  } catch (error) {
+    console.error('WhatsApp send error:', error)
+  }
+}
+
+// GET — Meta webhook verification
 app.get('/api/public/whatsapp', (req, res) => {
   const mode = req.query['hub.mode']
   const token = req.query['hub.verify_token']
@@ -12,10 +42,12 @@ app.get('/api/public/whatsapp', (req, res) => {
     console.log('Webhook verified successfully')
     res.status(200).send(challenge)
   } else {
+    console.log('Webhook verification failed')
     res.sendStatus(403)
   }
 })
 
+// POST — Incoming WhatsApp messages
 app.post('/api/public/whatsapp', async (req, res) => {
   res.sendStatus(200) // Respond to Meta immediately
 
@@ -25,6 +57,7 @@ app.post('/api/public/whatsapp', async (req, res) => {
     const message = changes?.value?.messages?.[0]
     const fromNumber = changes?.value?.contacts?.[0]?.wa_id || message?.from
 
+    // Skip if not a voice message
     if (!message || message.type !== 'audio') {
       console.log('Not a voice message, skipping')
       return
@@ -49,6 +82,10 @@ app.post('/api/public/whatsapp', async (req, res) => {
     const audioUrl = mediaData.url
     if (!audioUrl) {
       console.error('No audio URL found:', JSON.stringify(mediaData))
+      await sendWhatsAppMessage(
+        fromNumber,
+        'Sorry, I could not access your voice note. Please try again.'
+      )
       return
     }
     console.log('Audio URL retrieved successfully')
@@ -59,24 +96,30 @@ app.post('/api/public/whatsapp', async (req, res) => {
         Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`
       }
     })
-    const audioBuffer = await audioRes.arrayBuffer()
-    console.log('Audio downloaded, size:', audioBuffer.byteLength)
+    const audioArrayBuffer = await audioRes.arrayBuffer()
+    const audioBuffer = Buffer.from(audioArrayBuffer)
+    console.log('Audio downloaded, size:', audioBuffer.length)
+
+    if (audioBuffer.length === 0) {
+      console.error('Audio buffer is empty')
+      await sendWhatsAppMessage(
+        fromNumber,
+        'Sorry, the voice note appears to be empty. Please try again.'
+      )
+      return
+    }
 
     // Step 3 — Transcribe using Groq Whisper (free)
-    const audioBufferNode = Buffer.from(audioBuffer)
-
+    console.log('Sending to Groq for transcription...')
     const form = new FormData()
-    form.append('file', audioBufferNode, {
+    form.append('file', audioBuffer, {
       filename: 'audio.ogg',
       contentType: 'audio/ogg; codecs=opus',
-      knownLength: audioBufferNode.length
+      knownLength: audioBuffer.length
     })
     form.append('model', 'whisper-large-v3')
     form.append('language', 'en')
     form.append('response_format', 'json')
-
-    console.log('Form data size:', audioBufferNode.length)
-    console.log('Sending to Groq...')
 
     const transcribeRes = await fetch(
       'https://api.groq.com/openai/v1/audio/transcriptions',
@@ -85,12 +128,26 @@ app.post('/api/public/whatsapp', async (req, res) => {
         headers: {
           Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
           ...form.getHeaders()
-      },
+        },
         body: form
       }
     )
+    const transcribeData = await transcribeRes.json()
+    console.log('Groq transcription response:', JSON.stringify(transcribeData))
+
+    const transcript = transcribeData.text
+    if (!transcript) {
+      console.error('Transcription failed:', JSON.stringify(transcribeData))
+      await sendWhatsAppMessage(
+        fromNumber,
+        'Sorry, I could not transcribe your voice note. Please speak clearly and try again.'
+      )
+      return
+    }
+    console.log('Transcript:', transcript)
 
     // Step 4 — Extract meeting minutes using Groq LLaMA (free)
+    console.log('Extracting meeting minutes...')
     const minutesRes = await fetch(
       'https://api.groq.com/openai/v1/chat/completions',
       {
@@ -114,9 +171,9 @@ app.post('/api/public/whatsapp', async (req, res) => {
               📋 *Action Items* (with person responsible and due date if mentioned)
               📅 *Next Meeting* (if mentioned)
               
-              Format the response as a clean WhatsApp message using emojis.
+              Format as a clean WhatsApp message using emojis.
               Be concise and professional.
-              If something is not mentioned in the transcript, skip that section.`
+              Skip sections not mentioned in the transcript.`
             },
             {
               role: 'user',
@@ -134,6 +191,10 @@ app.post('/api/public/whatsapp', async (req, res) => {
     const minutes = minutesData.choices?.[0]?.message?.content
     if (!minutes) {
       console.error('Minutes extraction failed:', JSON.stringify(minutesData))
+      await sendWhatsAppMessage(
+        fromNumber,
+        'Sorry, I could not extract meeting minutes. Please try again.'
+      )
       return
     }
     console.log('Minutes extracted successfully')
@@ -146,7 +207,6 @@ app.post('/api/public/whatsapp', async (req, res) => {
     console.log('Reply sent to:', fromNumber)
 
     // Step 6 — Save to Supabase
-    const { createClient } = require('@supabase/supabase-js')
     const supabase = createClient(
       process.env.SUPABASE_URL,
       process.env.SUPABASE_SERVICE_KEY
@@ -168,29 +228,6 @@ app.post('/api/public/whatsapp', async (req, res) => {
     console.error('Processing error:', error)
   }
 })
-
-// Helper function to send WhatsApp messages
-async function sendWhatsAppMessage(to, message) {
-  const res = await fetch(
-    `https://graph.facebook.com/v18.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to: to,
-        type: 'text',
-        text: { body: message }
-      })
-    }
-  )
-  const data = await res.json()
-  console.log('WhatsApp send response:', JSON.stringify(data))
-  return data
-}
 
 app.listen(process.env.PORT || 3000, () => {
   console.log('Webhook server running')
