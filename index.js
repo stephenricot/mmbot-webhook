@@ -1,3 +1,4 @@
+const fetch = require('node-fetch')
 const express = require('express')
 const FormData = require('form-data')
 const app = express()
